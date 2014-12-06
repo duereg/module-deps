@@ -21,10 +21,10 @@ function Deps (mains, opts) {
     var self = this;
     if (!(this instanceof Deps)) return new Deps(mains, opts);
     Readable.call(this, { objectMode: true });
-    
+
     if (!opts) opts = {};
     if (!Array.isArray(mains)) mains = [ mains ].filter(Boolean);
-    
+
     this.basedir = opts.basedir || process.cwd();
     this.cache = opts.cache;
     this.pkgCache = opts.packageCache || {};
@@ -32,22 +32,22 @@ function Deps (mains, opts) {
     this.pkgFileCachePending = {};
     this.visited = {};
     this.walking = {};
-    
+
     this.paths = opts.paths || process.env.NODE_PATH;
     if (typeof this.paths === 'string') {
         this.paths = process.env.NODE_PATH.split(':');
     }
     if (!this.paths) this.paths = [];
-    
+
     this.entries = [];
     this.mains = [];
-    
+
     this.transforms = [].concat(opts.transform).filter(Boolean);
     this.resolver = opts.resolve || browserResolve;
     this.options = opts;
     this.pending = 0;
     this.top = { id: '/', filename: '/', paths: this.paths };
-    
+
     mains.forEach(function (file) { self.add(file) });
 }
 
@@ -59,25 +59,25 @@ Deps.prototype._read = function () {
 
 Deps.prototype._start = function () {
     var self = this;
-    
+
     if (this.entries.length === 0) {
         return this.push(null);
     }
-    
+
     for (var i = 0; i < this.entries.length; i++) (function (i) {
         var main = self.mains[i];
         var file = self.entries[i];
-        
+
         self.lookupPackage(file, function (err, pkg) {
             if (err) return self.emit('error', err)
             else start(main, file, pkg)
         });
     })(i);
-    
+
     function start (main, file, pkg) {
         if (!pkg) pkg = {};
         if (!pkg.__dirname) pkg.__dirname = path.dirname(file);
-        
+
         if (typeof main === 'object') {
             self.walk({ stream: main, file: main.path || file }, main);
         }
@@ -87,7 +87,7 @@ Deps.prototype._start = function () {
 
 Deps.prototype.add = function (main) {
     var self = this;
-    
+
     var file;
     if (typeof main.pipe === 'function') {
         var n = Math.floor(Math.pow(16,8) * Math.random()).toString(16);
@@ -107,7 +107,7 @@ Deps.prototype.add = function (main) {
 Deps.prototype.resolve = function (id, parent, cb) {
     var self = this;
     var opts = self.options;
-    
+
     if (xhas(self.cache, parent.id, 'deps', id)
     && self.cache[parent.id].deps) {
         var file = self.cache[parent.id].deps[id];
@@ -117,24 +117,24 @@ Deps.prototype.resolve = function (id, parent, cb) {
             cb(null, file, pkg);
         });
     }
-    
+
     var pkgdir;
     parent.packageFilter = function (p, x) {
         pkgdir = x;
         if (opts.packageFilter) return opts.packageFilter(p, x);
         else return p;
     };
-    
+
     if (opts.extensions) parent.extensions = opts.extensions;
     if (opts.modules) parent.modules = opts.modules;
-    
+
     self.resolver(id, parent, function onresolve (err, file, pkg) {
         if (err) return cb(err);
         if (!file) return cb(new Error(
             'module not found: "' + id + '" from file '
             + parent.filename
         ));
-        
+
         if (pkg && pkgdir) pkg.__dirname = pkgdir;
         if (!pkg || !pkg.__dirname) {
             self.lookupPackage(file, function (err, p) {
@@ -166,22 +166,24 @@ Deps.prototype.readFile = function (file, pkg) {
 
 Deps.prototype.getTransforms = function (file, pkg) {
     var self = this;
+    var opts = self.options;
+
     var isTopLevel = this.entries.some(function (main) {
         var m = path.relative(path.dirname(main), file);
-        return m.split('/').indexOf('node_modules') < 0;
+        return m.split(/[\\\/]/).indexOf('node_modules') < 0;
     });
-    
-    var transforms = [].concat(isTopLevel ? this.transforms : [])
+
+    var transforms = [].concat(isTopLevel || opts.transformAll ? this.transforms : [])
         .concat(getTransforms(pkg, this.options))
     ;
     if (transforms.length === 0) return through();
-    
+
     var pending = transforms.length;
     var streams = [];
     var input = through();
     var output = through();
     var dup = duplexer(input, output);
-    
+
     for (var i = 0; i < transforms.length; i++) (function (i) {
         makeTransform(transforms[i], function (err, trs) {
             if (err) return self.emit('error', err)
@@ -190,7 +192,7 @@ Deps.prototype.getTransforms = function (file, pkg) {
         });
     })(i);
     return dup;
-    
+
     function done () {
         var middle = combine.apply(null, streams);
         middle.on('error', function (err) {
@@ -198,7 +200,7 @@ Deps.prototype.getTransforms = function (file, pkg) {
         });
         input.pipe(middle).pipe(output);
     }
-    
+
     function makeTransform (tr, cb) {
         var trOpts = {};
         if (Array.isArray(tr)) {
@@ -217,29 +219,29 @@ Deps.prototype.getTransforms = function (file, pkg) {
             });
         }
     }
-    
+
     function loadTransform (id, trOpts, cb) {
         var params = { basedir: path.dirname(file) };
         nodeResolve(id, params, function nr (err, res, again) {
             if (err && again) return cb(err);
-            
+
             if (err) {
                 params.basedir = pkg.__dirname;
                 return nodeResolve(id, params, function (e, r) {
                     nr(e, r, true)
                 });
             }
-            
+
             if (!res) return cb(new Error(
                 'cannot find transform module ' + tr
                 + ' while transforming ' + file
             ));
-            
+
             var r = require(res);
             if (typeof r !== 'function') {
                 return cb(new Error('transform not a function'));
             }
-            
+
             var trs = r(file, trOpts);
             self.emit('transform', trs, file);
             cb(null, trs);
@@ -251,7 +253,7 @@ Deps.prototype.walk = function (id, parent, cb) {
     var self = this;
     var opts = self.options;
     this.pending ++;
-    
+
     if (id && typeof id === 'object' && id.stream) {
         self.lookupPackage(id.file, function (err, pkg) {
             id.stream
@@ -265,7 +267,7 @@ Deps.prototype.walk = function (id, parent, cb) {
         });
         return;
     }
-    
+
     self.resolve(id, parent, function (err, file, pkg) {
         if (err) return self.emit('error', err);
         if (self.visited[file]) {
@@ -273,17 +275,17 @@ Deps.prototype.walk = function (id, parent, cb) {
             return cb && cb(null, file);
         }
         self.visited[file] = true;
-        
+
         var c = self.cache && self.cache[file];
         if (c) return fromDeps(file, c.source, c.package, Object.keys(c.deps));
-        
+
         self.readFile(file, pkg).pipe(concat(function (body) {
             var src = body.toString('utf8');
             var deps = self.parseDeps(file, src);
             if (deps) fromDeps(file, src, pkg, deps);
         }));
     });
-    
+
     function fromDeps (file, src, pkg, deps) {
         var p = deps.length;
         var current = {
@@ -293,7 +295,7 @@ Deps.prototype.walk = function (id, parent, cb) {
             package: pkg
         };
         var resolved = {};
-        
+
         deps.forEach(function (id) {
             if (opts.filter && !opts.filter(id)) {
                 resolved[id] = false;
@@ -306,7 +308,7 @@ Deps.prototype.walk = function (id, parent, cb) {
             });
         });
         if (deps.length === 0) done();
-        
+
         function done () {
             var rec = {
                 id: file,
@@ -317,7 +319,7 @@ Deps.prototype.walk = function (id, parent, cb) {
                 rec.entry = true;
             }
             self.push(rec);
-            
+
             if (cb) cb(null, file);
             if (-- self.pending === 0) self.push(null);
         }
@@ -327,12 +329,12 @@ Deps.prototype.walk = function (id, parent, cb) {
 Deps.prototype.parseDeps = function (file, src, cb) {
     if (this.options.noParse === true) return [];
     if (/\.json$/.test(file)) return [];
-    
+
     if (Array.isArray(this.options.noParse)
     && this.options.noParse.indexOf(file) >= 0) {
         return [];
     }
-    
+
     try { var deps = detective(src) }
     catch (ex) {
         var message = ex && ex.message ? ex.message : ex;
@@ -346,13 +348,13 @@ Deps.prototype.parseDeps = function (file, src, cb) {
 
 Deps.prototype.lookupPackage = function (file, cb) {
     var self = this;
-    
+
     var cached = this.pkgCache[file];
     if (cached) return nextTick(cb, null, cached);
     if (cached === false) return nextTick(cb, null, undefined);
-    
+
     var dirs = parents(path.dirname(file));
-    
+
     (function next () {
         if (dirs.length === 0) {
             self.pkgCache[file] = false;
@@ -362,17 +364,17 @@ Deps.prototype.lookupPackage = function (file, cb) {
         if (dir.split('/').slice(-1)[0] === 'node_modules') {
             return cb(null, undefined);
         }
-        
+
         var pkgfile = path.join(dir, 'package.json');
-        
+
         var cached = self.pkgCache[pkgfile];
         if (cached) return nextTick(cb, null, cached);
         else if (cached === false) return next();
-        
+
         var pcached = self.pkgFileCachePending[pkgfile];
         if (pcached) return pcached.push(onpkg);
         pcached = self.pkgFileCachePending[pkgfile] = [];
-        
+
         fs.readFile(pkgfile, function (err, src) {
             if (err) return onpkg();
             try { var pkg = JSON.parse(src) }
@@ -382,12 +384,12 @@ Deps.prototype.lookupPackage = function (file, cb) {
                 ].join('')))
             }
             pkg.__dirname = dir;
-            
+
             self.pkgCache[pkgfile] = pkg;
             self.pkgCache[file] = pkg;
             onpkg(null, pkg);
         });
-        
+
         function onpkg (err, pkg) {
             if (self.pkgFileCachePending[pkgfile]) {
                 var fns = self.pkgFileCachePending[pkgfile];
@@ -404,7 +406,7 @@ Deps.prototype.lookupPackage = function (file, cb) {
         }
     })();
 };
- 
+
 function getTransforms (pkg, opts) {
     var trx = [];
     if (opts.transformKey) {
